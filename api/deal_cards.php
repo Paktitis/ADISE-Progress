@@ -3,9 +3,16 @@ header('Content-Type: application/json; charset=utf-8');
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
-$mysqli = new mysqli("localhost", "root", "", "adise_db");
+$host = "localhost";
+$user = "iee2019231";
+$pass = "Ptuxiosta5!!";
+$db   = "ADISE25_Progress_db";
+$socket = "/home/student/iee/2019/iee2019231/mysql/run/mysql.sock";
+
+$mysqli = new mysqli($host, $user, $pass, $db, null, $socket);
 if ($mysqli->connect_error) {
-  echo json_encode(["ok" => false, "error" => "db"]);
+  http_response_code(500);
+  echo json_encode(["ok"=>false, "error"=>"db_connect_failed", "details"=>$mysqli->connect_error]);
   exit;
 }
 
