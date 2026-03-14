@@ -1,8 +1,8 @@
 <?php
 header('Content-Type: application/json; charset=utf-8');
 
-/* ---------------- DB ---------------- */
-$host = "localhost";
+// Συνδεση με την Βαση μεσω Socket καθως
+$host = "localhost"; // η βαση δεν ειναι πλεον τοπικα αλλα στο users
 $user = "iee2019231";
 $pass = "Ptuxiosta5!!";
 $db   = "ADISE25_Progress_db";
@@ -15,7 +15,7 @@ if ($mysqli->connect_error) {
   exit;
 }
 
-/* ---------------- Helpers ---------------- */
+
 function json_out($arr, $code=200){
   http_response_code($code);
   echo json_encode($arr, JSON_UNESCAPED_UNICODE);
@@ -26,16 +26,17 @@ function rank_of($card){
   return substr($card, 0, -1); // "10S"->"10", "JH"->"J"
 }
 
-/* ---------------- Input ---------------- */
+// Δεχεται σαν ορισματα τα game_id,username,card
 $game_id  = intval($_POST["game_id"] ?? 0);
 $username = trim($_POST["username"] ?? "");
 $card     = trim($_POST["card"] ?? "");
 
-if ($game_id <= 0 || $username === "" || $card === "") {
+if ($game_id <= 0 || $username === "" || $card === "") { //Ελεγχει αν λειπει καποια παραμετρος
   json_out(["ok"=>false,"error"=>"missing_params","need"=>"game_id, username, card"], 400);
 }
 
-/* ---------------- Find player_id ---------------- */
+// Απο το ονομα που δεχεται, βρισκει τον παικτη στην βαση ψαχνοντας στον 
+//πινακα players
 $stmt = $mysqli->prepare("SELECT id FROM players WHERE username=?");
 $stmt->bind_param("s", $username);
 $stmt->execute();
@@ -44,7 +45,8 @@ $row = $res->fetch_assoc();
 if (!$row) json_out(["ok"=>false,"error"=>"player_not_found"], 404);
 $player_id = intval($row["id"]);
 
-/* ---------------- Load game ---------------- */
+//Φορτωνει το παιχνιδι και ελεγχει
+//αν υπαρχει το game, αν ειναι σε κατασταση playing και αν ακολουθειται η σωστη σειρα στους παικτες
 $stmt = $mysqli->prepare("SELECT id, status, player1_id, player2_id, turn_player_id, state_json FROM games WHERE id=?");
 $stmt->bind_param("i", $game_id);
 $stmt->execute();
@@ -60,7 +62,8 @@ if ($turn_player_id !== $player_id) {
   json_out(["ok"=>false,"error"=>"not_your_turn","turn_player_id"=>$turn_player_id], 409);
 }
 
-/* ---------------- Load game_players row (hand) ---------------- */
+
+//Εδω ελεγχουμε αν ο παικτης παιζει φυλλο που οντως εχει στο χερι του
 $stmt = $mysqli->prepare("SELECT seat, hand_json, cards_left FROM game_players WHERE game_id=? AND player_id=?");
 $stmt->bind_param("ii", $game_id, $player_id);
 $stmt->execute();
@@ -74,7 +77,7 @@ if (!in_array($card, $hand, true)) {
   json_out(["ok"=>false,"error"=>"card_not_in_hand","card"=>$card,"hand"=>$hand], 409);
 }
 
-/* ---------------- Load state_json ---------------- */
+//Φορτωνει στην βαση το state_json
 $state = json_decode($g["state_json"] ?? "{}", true);
 if (!is_array($state)) $state = [];
 if (!isset($state["table"]) || !is_array($state["table"])) $state["table"] = [];
@@ -82,35 +85,40 @@ if (!isset($state["deck"])  || !is_array($state["deck"]))  $state["deck"]  = [];
 
 $table = $state["table"]; // table BEFORE play
 
-/* ---------------- Capture + Xeri logic (based on table BEFORE play) ---------------- */
+
+//Capture - Xeri λογικη
 $did_capture = false;
 $is_xeri = false;
 $is_jack_xeri = false;
 
 $card_rank = rank_of($card);
 
-$pre_count = count($table);
+$pre_count = count($table);//εδω κοιταει το τελευταιο φυλλο που ειναι ηδη πανω στο τραπεζι
 $prev_top  = ($pre_count >= 1) ? $table[$pre_count - 1] : null;
 $prev_rank = $prev_top ? rank_of($prev_top) : null;
 
-// capture rules
+// Εδω κανω capture (μπαζα)
 if ($pre_count > 0) {
-  if ($card_rank === "J") {
-    $did_capture = true;
+  if ($card_rank === "J") { //μαζευω με J
+    $did_capture = true; // ή με ιδιο αριθμο φυλλου
   } elseif ($prev_rank !== null && $card_rank === $prev_rank) {
     $did_capture = true;
   }
 }
 
-// xeri rules: capture when there was EXACTLY 1 card on table before you played
+// Εδω γινεται η ξερη
+// Κανω capture οταν υπαρχει μονο 1 καρτα στο τραπεζι πριν παιξει ο παικτης 
 if ($did_capture && $pre_count === 1) {
   $is_xeri = true;
-  if ($card_rank === "J") $is_jack_xeri = true;
+  if ($card_rank === "J") $is_jack_xeri = true; //αν εγινε το μαζεμα με J τοτε ειναι ξερη με βαλε
 }
 
-/* ---------------- Apply move: update captured/table ---------------- */
+
+// Ενημερωση των δεδομενων
+// Σε περιπτωση ξερης : 
+//Διαβαζει το captured_json , Βαζει μεσα ολα τα φυλλα του τραπεζιου, βαζει και το φυλλο που επαιξε ο παικτης και ενημερωνει το captured_json
 if ($did_capture) {
-  // read captured_json
+  // διαβαζει το captured_json
   $stmt = $mysqli->prepare("SELECT captured_json FROM game_players WHERE game_id=? AND player_id=?");
   $stmt->bind_param("ii", $game_id, $player_id);
   $stmt->execute();
@@ -119,7 +127,7 @@ if ($did_capture) {
   $captured = json_decode($capRow["captured_json"] ?? "[]", true);
   if (!is_array($captured)) $captured = [];
 
-  // capture: all table cards + played card
+  // Κανε capture: ολες τις καρτες που επεσαν στο τραπεζι καθως και την καρτα που επεσε τελευταια
   foreach ($table as $c) $captured[] = $c;
   $captured[] = $card;
 
@@ -129,7 +137,8 @@ if ($did_capture) {
   $stmt->bind_param("sii", $captured_json, $game_id, $player_id);
   $stmt->execute();
 
-  // update xeri counters
+  // Μετα, αν ειναι ξερη => αυξανει το xeri_count
+  //Αν ειναι jack xeri => αυξανει το xeri_jack_count
   if ($is_xeri) {
     if ($is_jack_xeri) {
       $stmt = $mysqli->prepare("UPDATE game_players SET xeri_jack_count = xeri_jack_count + 1 WHERE game_id=? AND player_id=?");
@@ -141,15 +150,16 @@ if ($did_capture) {
       $stmt->execute();
     }
   }
-
-  // clear table after capture
+  // Κανει clear table
   $table = [];
+
+  //Αν δεν εγινε captured , τοτε το φυλλο μπαινει απλα πανω στο τραπεζι
 } else {
-  // normal play: put card on table
+  
   $table[] = $card;
 }
 
-/* ---------------- Remove card from hand ---------------- */
+/* ----------------Εδω αφαιρει το φυλλο απο το χερι ---------------- */
 $new_hand = [];
 $removed = false;
 foreach ($hand as $h) {
@@ -164,7 +174,7 @@ $stmt = $mysqli->prepare("UPDATE game_players SET hand_json=?, cards_left=? WHER
 $stmt->bind_param("siii", $hand_json, $cards_left, $game_id, $player_id);
 $stmt->execute();
 
-/* ---------------- Next turn player ---------------- */
+/* ---------------Εδω αλλαζει σειρα των παικτων ---------------- */
 $player1_id = intval($g["player1_id"]);
 $player2_id = intval($g["player2_id"]);
 $next_turn_player_id = ($player_id === $player1_id) ? $player2_id : $player1_id;
@@ -177,7 +187,8 @@ $stmt = $mysqli->prepare("UPDATE games SET state_json=?, turn_player_id=?, updat
 $stmt->bind_param("sii", $state_json, $next_turn_player_id, $game_id);
 $stmt->execute();
 
-/* ---------------- Log move ---------------- */
+//Καθε κινηση καταγραφεται στον πινακα moves ωστε να υπαρχει το ιστορικο 
+//των κινησεων των παικτων για παν ενδεχομενο
 $action = $did_capture ? "capture" : "play";
 $move_obj = [
   "card" => $card,
@@ -193,11 +204,12 @@ $stmt->execute();
 $crow = $stmt->get_result()->fetch_assoc();
 $turn_no = intval($crow["c"]) + 1;
 
+//Εδω βλεπουμε τι καταγραφεται στον πινακα moves
 $stmt = $mysqli->prepare("INSERT INTO moves (game_id, player_id, action, card, move_json, turn_no) VALUES (?,?,?,?,?,?)");
 $stmt->bind_param("iisssi", $game_id, $player_id, $action, $card, $move_json, $turn_no);
 $stmt->execute();
 
-/* ---------------- Response ---------------- */
+//Κλασσικη επιστροφη JSON
 json_out([
   "ok" => true,
   "game_id" => $game_id,
@@ -212,4 +224,10 @@ json_out([
   "cards_left" => $cards_left
 ]);
 
-//test
+/*Το play_card ειναι το endpoint που εκτελει την κινηση του παικτη.
+Πρωτα ελεγχει οτι το παιχνιδι υπαρχει , οτι ειναι σε κατασταση playing ,
+οτι ειναι η σωστη σειρα και οτι ο παικτης εχει οντως το φυλλο στο χερι του.
+Μετα εφαρμοζει τοους κανονες του παιχνιδιου για τις μπαζες και τις ξερες
+ - ειτε απλη ειτε με Jack -. Αν το capture γινει οταν υπαρχει μονο μια καρτα 
+πανω τοτε ειναι ξερη κλπ ... Τελος ενημερωνει το χερι του παικτη, την κατασταση του τραπεζιου
+πραγματα που καταγραφει στον πινακα moves.*/

@@ -1,7 +1,7 @@
 <?php
 header('Content-Type: application/json; charset=utf-8');
 
-/* ---------------- DB ---------------- */
+/* ------------Συνδεση στην Βαση Δεδομενων---------------- */
 $host = "localhost";
 $user = "iee2019231";
 $pass = "Ptuxiosta5!!";
@@ -24,11 +24,13 @@ function json_out($arr, $code=200){
 function rank_of($card){ return substr($card, 0, -1); }
 function suit_of($card){ return substr($card, -1); }
 
-/* ---------------- Input ---------------- */
+// Παιρνει το game_id
 $game_id = intval($_GET["game_id"] ?? $_POST["game_id"] ?? 0);
 if ($game_id <= 0) json_out(["ok"=>false,"error"=>"missing_game_id"], 400);
 
-/* ---------------- Load players in game ---------------- */
+//Παιρνει για καθε παικτη : 
+//player_id,username,captured_json,xeri_count,xeri_jack_count
+//Δηλαδη ολα τα δεδομενα που χρειαζονται για την βαθμολογιση!
 $stmt = $mysqli->prepare("
   SELECT gp.player_id, p.username, gp.captured_json, gp.xeri_count, gp.xeri_jack_count
   FROM game_players gp
@@ -55,39 +57,39 @@ while ($row = $res->fetch_assoc()) {
 
 if (count($players) < 2) json_out(["ok"=>false,"error"=>"need_two_players"], 409);
 
-/* ---------------- Compute per-player details ---------------- */
+// Για καθε παικτη υπολογιζει τα βασικα στοιχεια 
 $details = [];
 $card_counts = []; // for 3pt rule
 
 foreach ($players as $pl) {
   $capt = $pl["captured"];
-  $count_cards = count($capt);
+  $count_cards = count($capt); //μετρα ποσα φυλλα εχει συνολικα - μπαζα
   $card_counts[$pl["player_id"]] = $count_cards;
 
-  $has_2S = false;
+  $has_2S = false; 
   $has_10D = false;
 
-  $face10_points = 0; // K,Q,J,10 except 10D
-  $face10_cards = []; // for explanation
+  $face10_points = 0; // K,Q,J,10 εκτος απο το  10D
+  $face10_cards = []; 
 
   foreach ($capt as $c) {
     $r = rank_of($c);
     $s = suit_of($c);
 
-    if ($r === "2" && $s === "S") $has_2S = true;     // 2 spades
-    if ($r === "10" && $s === "D") $has_10D = true;   // 10 diamonds
+    if ($r === "2" && $s === "S") $has_2S = true;     // 2 Of Spades  +1 ποντο
+    if ($r === "10" && $s === "D") $has_10D = true;   // 10 Of Diamonds +1 ποντο
 
     // K,Q,J,10 (NOT 10D)
     if (in_array($r, ["K","Q","J","10"], true)) {
       if (!($r === "10" && $s === "D")) {
-        $face10_points += 1;
+        $face10_points += 1; //Κ,Q,J,10, +1 εκτος απο το 10D
         $face10_cards[] = $c;
       }
     }
   }
 
-  $xeri_pts = $pl["xeri_count"] * 10;
-  $xeri_j_pts = $pl["xeri_jack_count"] * 20;
+  $xeri_pts = $pl["xeri_count"] * 10;  //Ποντοι απο ξερη απλη
+  $xeri_j_pts = $pl["xeri_jack_count"] * 20; //Ποντοι απο ξερη με jack
 
   $details[$pl["player_id"]] = [
     "player_id" => $pl["player_id"],
@@ -106,7 +108,7 @@ foreach ($players as $pl) {
   ];
 }
 
-/* ---------------- Rule: +3 for most cards (no one if tie) ---------------- */
+//Κανονας +3 σε οποιον εχει μεγαλυτερη μπαζα
 $max_cards = max(array_values($card_counts));
 $winners = [];
 foreach ($card_counts as $pid => $cnt) {
@@ -116,7 +118,7 @@ if (count($winners) === 1) {
   $details[$winners[0]]["bonus_more_cards"] = 3;
 }
 
-/* ---------------- Totals & winner ---------------- */
+//Υπολογιζει το συνολικο score εδω και προσθετει ολους τους ποντους!
 $totals = [];
 foreach ($details as $pid => $d) {
   $total =
@@ -131,26 +133,29 @@ foreach ($details as $pid => $d) {
   $totals[$pid] = $total;
 }
 
+//Εδω συγκρινει τα totals και βγαζει τον νικητη!
+//Επειτα τον αποθηκευει στην βαση!
 $max_total = max($totals);
 $top = [];
 foreach ($totals as $pid => $t) if ($t === $max_total) $top[] = $pid;
 
 $winner_id = (count($top) === 1) ? $top[0] : null;
 
-/* ---------------- Persist score + winner (optional αλλά χρήσιμο) ---------------- */
+//
 foreach ($details as $pid => $d) {
   $stmt = $mysqli->prepare("UPDATE game_players SET score=? WHERE game_id=? AND player_id=?");
   $stmt->bind_param("iii", $d["total"], $game_id, $pid);
   $stmt->execute();
 }
 
+//Γραφει το σκορ στην βαση, αποθηκευει τον νικητη και οριζει το game ως finished!
 if ($winner_id !== null) {
   $stmt = $mysqli->prepare("UPDATE games SET winner_id=?, status='finished', updated_at=CURRENT_TIMESTAMP WHERE id=?");
   $stmt->bind_param("ii", $winner_id, $game_id);
   $stmt->execute();
 }
 
-/* ---------------- Response ---------------- */
+// Κλασσικη JSON Response
 json_out([
   "ok" => true,
   "game_id" => $game_id,
@@ -166,3 +171,8 @@ json_out([
     "xeri_with_J_20pts" => true
   ]
 ]);
+
+/*Το συγκεκριμενο endpoint υπολογιζει την τελικη βαθμολογια της παρτιδας.
+Παιρνει τα captured φυλλα καθε παικτη, τις ξερες και αυτες με βαλε και εφαρμοζει 
+τους κανονες βαθμολογισης! Μετα βρισκει τον νικητη, αποθηκευει το score στην βαση 
+και επιστρεφει αναλυτικη JSON απαντηση! 
